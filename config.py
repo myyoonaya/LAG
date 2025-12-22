@@ -15,6 +15,7 @@ def get_config():
     parser = _get_recurrent_config(parser)
     parser = _get_optimizer_config(parser)
     parser = _get_ppo_config(parser)
+    parser = _get_td3_config(parser)
     parser = _get_selfplay_config(parser)
     parser = _get_save_config(parser)
     parser = _get_log_config(parser)
@@ -56,7 +57,7 @@ def _get_prepare_config(parser: argparse.ArgumentParser):
     group = parser.add_argument_group("Prepare parameters")
     group.add_argument("--env-name", type=str, default='JSBSim',
                        help="specify the name of environment")
-    group.add_argument("--algorithm-name", type=str, default='ppo', choices=["ppo", "mappo"],
+    group.add_argument("--algorithm-name", type=str, default='ppo', choices=["ppo", "mappo", "td3"],
                        help="Specifiy the algorithm (default ppo)")
     group.add_argument("--experiment-name", type=str, default="check",
                        help="An identifier to distinguish different experiment.")
@@ -212,6 +213,58 @@ def _get_ppo_config(parser: argparse.ArgumentParser):
                        help="By default, use max norm of gradients. If set, do not use.")
     group.add_argument("--max-grad-norm", type=float, default=2,
                        help='max norm of gradients (default: 2)')
+    return parser
+
+
+def _get_td3_config(parser: argparse.ArgumentParser):
+    """
+    TD3 parameters:
+        --td3-buffer-size <int>
+            max size of off-policy replay buffer
+        --batch-size <int>
+            batch size for TD3 updates
+        --start-timesteps <int>
+            number of random steps before learning starts
+        --actor-lr <float>
+            learning rate for actor
+        --critic-lr <float>
+            learning rate for critic
+        --tau <float>
+            target network update rate
+        --policy-delay <int>
+            delayed policy update steps
+        --target-noise <float>
+            target policy smoothing noise std
+        --noise-clip <float>
+            clip range for target noise
+        --explore-noise <float>
+            exploration noise std for behavior policy
+        --updates-per-step <int>
+            number of TD3 updates per env step
+    """
+    group = parser.add_argument_group("TD3 parameters")
+    group.add_argument("--td3-buffer-size", type=int, default=100000,
+                       help="max size of off-policy replay buffer (default: 100000)")
+    group.add_argument("--batch-size", type=int, default=256,
+                       help="batch size for TD3 updates (default: 256)")
+    group.add_argument("--start-timesteps", type=int, default=10000,
+                       help="number of random steps before learning starts (default: 10000)")
+    group.add_argument("--actor-lr", type=float, default=1e-3,
+                       help="actor learning rate (default: 1e-3)")
+    group.add_argument("--critic-lr", type=float, default=1e-3,
+                       help="critic learning rate (default: 1e-3)")
+    group.add_argument("--tau", type=float, default=0.005,
+                       help="target network update rate (default: 0.005)")
+    group.add_argument("--policy-delay", type=int, default=2,
+                       help="delayed policy update steps (default: 2)")
+    group.add_argument("--target-noise", type=float, default=0.2,
+                       help="target policy smoothing noise std (default: 0.2)")
+    group.add_argument("--noise-clip", type=float, default=0.5,
+                       help="clip range for target noise (default: 0.5)")
+    group.add_argument("--explore-noise", type=float, default=0.1,
+                       help="exploration noise std (default: 0.1)")
+    group.add_argument("--updates-per-step", type=int, default=1,
+                       help="number of TD3 updates per env step (default: 1)")
     return parser
 
 
