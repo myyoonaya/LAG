@@ -15,6 +15,7 @@ def get_config():
     parser = _get_recurrent_config(parser)
     parser = _get_optimizer_config(parser)
     parser = _get_ppo_config(parser)
+    parser = _get_dqn_config(parser)
     parser = _get_selfplay_config(parser)
     parser = _get_save_config(parser)
     parser = _get_log_config(parser)
@@ -56,7 +57,7 @@ def _get_prepare_config(parser: argparse.ArgumentParser):
     group = parser.add_argument_group("Prepare parameters")
     group.add_argument("--env-name", type=str, default='JSBSim',
                        help="specify the name of environment")
-    group.add_argument("--algorithm-name", type=str, default='ppo', choices=["ppo", "mappo"],
+    group.add_argument("--algorithm-name", type=str, default='ppo', choices=["ppo", "mappo", "dqn"],
                        help="Specifiy the algorithm (default ppo)")
     group.add_argument("--experiment-name", type=str, default="check",
                        help="An identifier to distinguish different experiment.")
@@ -212,6 +213,46 @@ def _get_ppo_config(parser: argparse.ArgumentParser):
                        help="By default, use max norm of gradients. If set, do not use.")
     group.add_argument("--max-grad-norm", type=float, default=2,
                        help='max norm of gradients (default: 2)')
+    return parser
+
+
+def _get_dqn_config(parser: argparse.ArgumentParser):
+    """
+    DQN parameters:
+        --dqn-batch-size <int>
+            batch size for DQN training (default: 32)
+        --dqn-update-interval <int>
+            number of env steps between each network update (default: 4)
+        --dqn-target-update-interval <int>
+            number of env steps between target network updates (default: 10000)
+        --dqn-warmup-steps <int>
+            number of steps to collect before training starts (default: 20000)
+        --dqn-buffer-size <int>
+            size of replay buffer (default: 100000)
+        --epsilon-start <float>
+            starting epsilon for epsilon-greedy exploration (default: 1.0)
+        --epsilon-end <float>
+            final epsilon for epsilon-greedy exploration (default: 0.05)
+        --epsilon-decay-steps <int>
+            number of steps over which to decay epsilon (default: 100000)
+    """
+    group = parser.add_argument_group("DQN parameters")
+    group.add_argument("--dqn-batch-size", type=int, default=32,
+                       help='batch size for DQN training (default: 32)')
+    group.add_argument("--dqn-update-interval", type=int, default=4,
+                       help='number of env steps between each network update (default: 4)')
+    group.add_argument("--dqn-target-update-interval", type=int, default=10000,
+                       help='number of env steps between target network updates (default: 10000)')
+    group.add_argument("--dqn-warmup-steps", type=int, default=20000,
+                       help='number of steps to collect before training starts (default: 20000)')
+    group.add_argument("--dqn-buffer-size", type=int, default=100000,
+                       help='size of replay buffer (default: 100000)')
+    group.add_argument("--epsilon-start", type=float, default=1.0,
+                       help='starting epsilon for epsilon-greedy exploration (default: 1.0)')
+    group.add_argument("--epsilon-end", type=float, default=0.05,
+                       help='final epsilon for epsilon-greedy exploration (default: 0.05)')
+    group.add_argument("--epsilon-decay-steps", type=int, default=100000,
+                       help='number of steps over which to decay epsilon (default: 100000)')
     return parser
 
 
