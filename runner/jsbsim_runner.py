@@ -27,6 +27,8 @@ class JSBSimRunner(Runner):
         elif self.algorithm_name == "td3":
             if self.use_selfplay:
                 raise NotImplementedError("TD3 does not support selfplay in this runner.")
+            if self.all_args.env_name != "SingleCombat":
+                raise NotImplementedError("TD3 is restricted to SingleCombat in this setup.")
             from algorithms.td3.td3_trainer import TD3Trainer as Trainer
             from algorithms.td3.td3_policy import TD3Policy as Policy
         else:

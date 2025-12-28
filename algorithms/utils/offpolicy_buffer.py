@@ -48,3 +48,12 @@ class OffPolicyBuffer:
             next_obs=self.next_obs[indices],
             dones=self.dones[indices],
         )
+
+    def clear(self):
+        self.ptr = 0
+        self.size = 0
+        self.obs.fill(0)
+        self.actions.fill(0)
+        self.rewards.fill(0)
+        self.next_obs.fill(0)
+        self.dones.fill(0)
