@@ -80,6 +80,23 @@ def main(args):
     torch.manual_seed(all_args.seed)
     torch.cuda.manual_seed_all(all_args.seed)
     
+    # Setup directories first
+    run_dir = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))) / "results" / all_args.env_name / all_args.scenario_name / all_args.algorithm_name / all_args.experiment_name
+    if not run_dir.exists():
+        os.makedirs(str(run_dir))
+    
+    # Setup logging EARLY so we can see all output
+    log_file = run_dir / 'train.log'
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ],
+        force=True
+    )
+    
     # Setup CUDA
     if all_args.cuda and torch.cuda.is_available():
         logging.info("Using GPU for training...")
@@ -92,27 +109,30 @@ def main(args):
         device = torch.device("cpu")
         torch.set_num_threads(all_args.n_training_threads)
     
-    # Setup directories
-    run_dir = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))) / "results" / all_args.env_name / all_args.scenario_name / all_args.algorithm_name / all_args.experiment_name
-    if not run_dir.exists():
-        os.makedirs(str(run_dir))
-    
     # Setup wandb
+    wandb_run = None
     if all_args.use_wandb:
-        run = wandb.init(
-            config=all_args,
-            project=all_args.env_name,
-            entity=all_args.wandb_name,
-            notes=socket.gethostname(),
-            name=str(all_args.algorithm_name) + "_" +
-                 str(all_args.experiment_name) +
-                 "_seed" + str(all_args.seed),
-            group=all_args.scenario_name,
-            dir=str(run_dir),
-            job_type="training",
-            reinit=True
-        )
-    else:
+        try:
+            wandb_run = wandb.init(
+                config=all_args,
+                project=all_args.env_name,
+                entity=all_args.wandb_name,
+                notes=socket.gethostname(),
+                name=str(all_args.algorithm_name) + "_" +
+                     str(all_args.experiment_name) +
+                     "_seed" + str(all_args.seed),
+                group=all_args.scenario_name,
+                dir=str(run_dir),
+                job_type="training",
+                reinit=True
+            )
+            logging.info("WandB initialized successfully!")
+        except Exception as e:
+            logging.warning(f"Failed to initialize WandB: {e}")
+            logging.warning("Continuing training without WandB logging...")
+            all_args.use_wandb = False
+    
+    if not all_args.use_wandb:
         if not run_dir.exists():
             curr_run = 'run1'
         else:
@@ -126,20 +146,9 @@ def main(args):
         if not run_dir.exists():
             os.makedirs(str(run_dir))
     
-    # Setup logging
+    # Setup process title
     setproctitle.setproctitle(
         str(all_args.algorithm_name) + "-" + str(all_args.env_name) + "-" + str(all_args.experiment_name) + "@" + str(all_args.user_name)
-    )
-    
-    # Log file
-    log_file = run_dir / 'train.log'
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
     )
     
     logging.info("=" * 50)
@@ -165,22 +174,36 @@ def main(args):
     logging.info("=" * 50)
     
     # Create environments
+    logging.info("Creating training environments...")
     envs = make_train_env(all_args)
-    eval_envs = make_eval_env(all_args) if all_args.use_eval else None
+    logging.info(f"Training environments created: {all_args.n_rollout_threads} parallel threads")
+    
+    if all_args.use_eval:
+        logging.info("Creating evaluation environments...")
+        eval_envs = make_eval_env(all_args)
+        logging.info(f"Evaluation environments created: {all_args.n_eval_rollout_threads} parallel threads")
+    else:
+        eval_envs = None
     
     # Create runner
+    logging.info("Initializing DQN Selfplay Runner...")
     config = {
         "all_args": all_args,
         "envs": envs,
         "eval_envs": eval_envs,
         "num_agents": envs.num_agents,
         "device": device,
-        "run_dir": run_dir
+        "run_dir": run_dir,
+        "render_mode": all_args.render_mode
     }
     
     runner = DQNSelfplayRunner(config)
+    logging.info("Runner initialized successfully!")
     
     # Start training
+    logging.info("\n" + "=" * 50)
+    logging.info("Starting training...")
+    logging.info("=" * 50 + "\n")
     try:
         runner.run()
     except Exception as e:
@@ -192,10 +215,9 @@ def main(args):
         envs.close()
         if eval_envs is not None:
             eval_envs.close()
-        if all_args.use_wandb:
-            run.finish()
-        else:
-            logging.info("Training completed!")
+        if all_args.use_wandb and wandb_run is not None:
+            wandb_run.finish()
+        logging.info("Training completed!")
 
 
 if __name__ == "__main__":

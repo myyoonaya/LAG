@@ -81,6 +81,11 @@ class DQNSelfplayRunner(Runner):
         # Training metrics
         episode_rewards = []
         episode_lengths = []
+        win_rates = []  # Track win rate
+        
+        # Running statistics for reward normalization
+        reward_mean = 0.0
+        reward_std = 1.0
         
         while self.total_num_steps < self.num_env_steps:
             # Collect one step from all parallel environments
@@ -95,34 +100,58 @@ class DQNSelfplayRunner(Runner):
                     episode_rewards.append(episode_reward)
                     episode_lengths.append(episode_length)
                     
+                    # Track win rate (check if ego won)
+                    if 'winner' in infos[env_idx]:
+                        win_rates.append(1.0 if infos[env_idx]['winner'] == 'ego' else 0.0)
+                    
                     # Reset episode buffers
                     self.episode_obs[env_idx] = []
                     self.episode_actions[env_idx] = []
                     self.episode_rewards[env_idx] = []
                     episodes_trained += 1
+                    
+                    # Update running reward statistics (for monitoring)
+                    if len(episode_rewards) > 100:
+                        reward_mean = np.mean(episode_rewards[-100:])
+                        reward_std = np.std(episode_rewards[-100:]) + 1e-8
             
             # Train the network
             train_info = self.trainer.train()
             
             # Logging
-            if self.total_num_steps % (self.log_interval * 100) == 0:
+            # More frequent logging (every 10 steps during warmup, every 100 steps after)
+            log_interval_steps = 10 if self.total_num_steps < self.trainer.warmup_steps else (self.log_interval * 100)
+            
+            if self.total_num_steps % log_interval_steps == 0 or self.total_num_steps == 1:
                 end = time.time()
-                fps = int(self.total_num_steps / (end - start))
+                fps = int(self.total_num_steps / (end - start)) if (end - start) > 0 else 0
                 
-                logging.info("\n Algo {} Exp {} timesteps {}/{}, FPS {}."
-                           .format(self.algorithm_name,
-                                   self.experiment_name,
-                                   self.total_num_steps,
-                                   self.num_env_steps,
-                                   fps))
+                # Show warmup progress
+                if self.total_num_steps < self.trainer.warmup_steps:
+                    warmup_progress = (self.total_num_steps / self.trainer.warmup_steps) * 100
+                    logging.info(f"[WARMUP] Progress: {warmup_progress:.1f}% ({self.total_num_steps}/{self.trainer.warmup_steps} steps), FPS: {fps}")
+                else:
+                    # Match PPO's selfplay output format
+                    logging.info("\n Scenario {} Algo {} Exp {} updates {}/{} episodes, total num timesteps {}/{}, FPS {}."
+                               .format(self.all_args.scenario_name,
+                                       self.algorithm_name,
+                                       self.experiment_name,
+                                       episodes_trained,
+                                       self.num_env_steps // 1000,
+                                       self.total_num_steps,
+                                       self.num_env_steps,
+                                       fps))
                 
-                if len(episode_rewards) > 0:
+                if len(episode_rewards) > 0 and self.total_num_steps >= self.trainer.warmup_steps:
                     avg_reward = np.mean(episode_rewards[-100:])
                     avg_length = np.mean(episode_lengths[-100:])
-                    logging.info("Episodes: {}, Avg Reward: {:.2f}, Avg Length: {:.1f}"
-                               .format(episodes_trained, avg_reward, avg_length))
+                    min_reward = np.min(episode_rewards[-100:]) if len(episode_rewards) >= 100 else np.min(episode_rewards)
+                    max_reward = np.max(episode_rewards[-100:]) if len(episode_rewards) >= 100 else np.max(episode_rewards)
+                    
+                    logging.info("Episodes: {}, Avg Reward: {:.2f} (min: {:.2f}, max: {:.2f}), Avg Length: {:.1f}"
+                               .format(episodes_trained, avg_reward, min_reward, max_reward, avg_length))
                 
-                if train_info:
+                if train_info and self.total_num_steps >= self.trainer.warmup_steps:
                     logging.info("Loss: {:.4f}, Q_mean: {:.2f}, Q_max: {:.2f}, Epsilon: {:.3f}, Buffer: {}"
                                .format(train_info.get('loss', 0),
                                        train_info.get('q_mean', 0),
@@ -133,6 +162,9 @@ class DQNSelfplayRunner(Runner):
                     # Log to wandb if enabled
                     train_info['average_episode_rewards'] = np.mean(episode_rewards[-100:]) if episode_rewards else 0
                     train_info['average_episode_length'] = np.mean(episode_lengths[-100:]) if episode_lengths else 0
+                    train_info['min_episode_reward'] = np.min(episode_rewards[-100:]) if len(episode_rewards) >= 100 else (np.min(episode_rewards) if episode_rewards else 0)
+                    train_info['max_episode_reward'] = np.max(episode_rewards[-100:]) if len(episode_rewards) >= 100 else (np.max(episode_rewards) if episode_rewards else 0)
+                    train_info['reward_std'] = np.std(episode_rewards[-100:]) if len(episode_rewards) >= 100 else 0
                     self.log_info(train_info, self.total_num_steps)
             
             # Evaluation
@@ -149,7 +181,10 @@ class DQNSelfplayRunner(Runner):
     
     def warmup(self):
         """Reset environment and initialize states."""
+        logging.info("Resetting environments and initializing states...")
         obs = self.envs.reset()
+        logging.info("Environments reset complete!")
+        
         # Split ego/opponent observations
         self.opponent_obs = obs[:, self.num_agents // 2:, ...]
         self.ego_obs = obs[:, :self.num_agents // 2, ...]
@@ -159,6 +194,9 @@ class DQNSelfplayRunner(Runner):
             self.episode_obs[env_idx] = [self.ego_obs[env_idx, 0].copy()]
             self.episode_actions[env_idx] = []
             self.episode_rewards[env_idx] = []
+        
+        logging.info(f"Warmup complete! Starting training with {self.n_rollout_threads} parallel environments.")
+        logging.info(f"Replay buffer warmup: collecting {self.trainer.warmup_steps} steps before training...\n")
     
     def step_envs(self):
         """
@@ -236,10 +274,15 @@ class DQNSelfplayRunner(Runner):
         self.policy_pool[policy_name] = 1500.0  # Initial Elo rating
         
         # Update opponent policies using self-play algorithm
-        selected_opponents = self.selfplay_algo.choose_opponent_policy(self.policy_pool, self.num_opponents)
-        
-        # For now, use latest policy for all opponents
-        for opp_policy in self.opponent_policy:
+        # For each opponent slot, choose a policy from the pool
+        for opp_idx, opp_policy in enumerate(self.opponent_policy):
+            if len(self.policy_pool) > 0:
+                # Choose opponent using selfplay algorithm
+                selected_opponent_name = self.selfplay_algo.choose(self.policy_pool)
+                # For simplicity, just use latest policy (all opponents use same policy)
+                # In full implementation, you would load different saved policies
+            
+            # Update opponent with current policy
             opp_policy.q_network.load_state_dict(self.policy.q_network.state_dict())
             opp_policy.target_network.load_state_dict(self.policy.target_network.state_dict())
         
@@ -330,3 +373,115 @@ class DQNSelfplayRunner(Runner):
             logging.info(f"Restored policy from {policy_model_path}")
         else:
             logging.warning(f"No checkpoint found at {policy_model_path}")
+    
+    def render(self):
+        """Render episodes and generate ACMI file for Tacview visualization."""
+        import os
+        
+        # Get model indices from args
+        idx = self.all_args.render_index
+        opponent_idx = self.all_args.render_opponent_index
+        
+        # Determine output path
+        dir_list = str(self.run_dir).split('/')
+        if '/' in str(self.run_dir):
+            file_path = '/'.join(dir_list[:dir_list.index('results')+1])
+        else:
+            dir_list = str(self.run_dir).split('\\')
+            file_path = '\\'.join(dir_list[:dir_list.index('results')+1])
+        
+        # Load ego policy
+        ego_policy_path = str(self.model_dir) + f'/policy_{idx}.pt'
+        if not os.path.exists(ego_policy_path):
+            # Try alternative naming
+            ego_policy_path = str(self.model_dir) + f'/step_{idx}/policy.pt'
+        
+        if os.path.exists(ego_policy_path):
+            self.policy.load(ego_policy_path)
+            logging.info(f"Loaded ego policy from: {ego_policy_path}")
+        else:
+            logging.error(f"Ego policy not found: {ego_policy_path}")
+            return
+        
+        # Load opponent policy
+        if hasattr(self, 'eval_opponent_policy') and self.eval_opponent_policy is not None:
+            opponent_policy_path = str(self.model_dir) + f'/policy_{opponent_idx}.pt'
+            if not os.path.exists(opponent_policy_path):
+                opponent_policy_path = str(self.model_dir) + f'/step_{opponent_idx}/policy.pt'
+            
+            if os.path.exists(opponent_policy_path):
+                self.eval_opponent_policy.load(opponent_policy_path)
+                logging.info(f"Loaded opponent policy from: {opponent_policy_path}")
+            else:
+                logging.warning(f"Opponent policy not found: {opponent_policy_path}, using ego policy")
+                self.eval_opponent_policy = self.policy
+        else:
+            logging.info("Using ego policy for opponent")
+            from algorithms.dqn.dqn_policy import DQNPolicy
+            self.eval_opponent_policy = DQNPolicy(
+                self.all_args,
+                self.envs.observation_space[0],
+                self.envs.action_space[0],
+                device=self.device
+            )
+            opponent_policy_path = str(self.model_dir) + f'/policy_{opponent_idx}.pt'
+            if not os.path.exists(opponent_policy_path):
+                opponent_policy_path = str(self.model_dir) + f'/step_{opponent_idx}/policy.pt'
+            if os.path.exists(opponent_policy_path):
+                self.eval_opponent_policy.load(opponent_policy_path)
+            else:
+                self.eval_opponent_policy = self.policy
+        
+        # Set to evaluation mode (epsilon=0)
+        self.policy.q_network.eval()
+        self.eval_opponent_policy.q_network.eval()
+        
+        logging.info("\nStart rendering to ACMI file...")
+        logging.info(f"Output file: {file_path}/{self.experiment_name}.txt.acmi")
+        
+        render_episode_rewards = 0
+        render_obs = self.envs.reset()
+        
+        # Initialize ACMI file
+        acmi_filepath = f'{file_path}/{self.experiment_name}.txt.acmi'
+        self.envs.render(mode='txt', filepath=acmi_filepath)
+        
+        # Split observations
+        render_opponent_obs = render_obs[:, self.num_agents // 2:, ...]
+        render_ego_obs = render_obs[:, :self.num_agents // 2, ...]
+        
+        step_count = 0
+        while True:
+            # Ego actions (deterministic, epsilon=0)
+            render_ego_actions = self.policy.get_actions(render_ego_obs, deterministic=True)
+            
+            # Opponent actions (deterministic, epsilon=0)
+            render_opponent_actions = self.eval_opponent_policy.get_actions(render_opponent_obs, deterministic=True)
+            
+            # Combine actions
+            render_actions = np.concatenate((render_ego_actions, render_opponent_actions), axis=1)
+            
+            # Step environment
+            render_obs, render_rewards, render_dones, render_infos = self.envs.step(render_actions)
+            render_rewards = render_rewards[:, :self.num_agents // 2, ...]
+            render_episode_rewards += render_rewards
+            
+            # Render to ACMI file
+            self.envs.render(mode='txt', filepath=acmi_filepath)
+            
+            step_count += 1
+            if step_count % 100 == 0:
+                logging.info(f"Rendered {step_count} steps...")
+            
+            # Check if done
+            if render_dones.all():
+                logging.info(f"\nRendering completed!")
+                logging.info(f"Total steps: {step_count}")
+                logging.info(f"Episode reward: {render_episode_rewards}")
+                logging.info(f"ACMI file saved to: {acmi_filepath}")
+                logging.info(f"\nYou can now open this file in Tacview for visualization.")
+                break
+            
+            # Split observations for next step
+            render_opponent_obs = render_obs[:, self.num_agents // 2:, ...]
+            render_ego_obs = render_obs[:, :self.num_agents // 2, ...]

@@ -25,6 +25,14 @@ class DuelingDQN(nn.Module):
         self.use_feature_normalization = args.use_feature_normalization
         self.tpdv = dict(dtype=torch.float32, device=device)
         
+        # Parse hidden size string to get dueling head dimension
+        # If hidden_size is "256 256", use last dimension (256)
+        if isinstance(self.hidden_size, str):
+            hidden_dims = list(map(int, self.hidden_size.split(' ')))
+            self.dueling_hidden_dim = hidden_dims[-1]
+        else:
+            self.dueling_hidden_dim = self.hidden_size
+        
         # Parse action space
         self.act_space = act_space
         self.action_dims = self._parse_action_space(act_space)
@@ -41,17 +49,17 @@ class DuelingDQN(nn.Module):
         for num_actions in self.action_dims:
             # Value stream: outputs single value
             value_head = nn.Sequential(
-                nn.Linear(self.base.output_size, self.hidden_size),
+                nn.Linear(self.base.output_size, self.dueling_hidden_dim),
                 self._get_activation(),
-                nn.Linear(self.hidden_size, 1)
+                nn.Linear(self.dueling_hidden_dim, 1)
             )
             self.value_heads.append(value_head)
             
             # Advantage stream: outputs advantage for each action
             advantage_head = nn.Sequential(
-                nn.Linear(self.base.output_size, self.hidden_size),
+                nn.Linear(self.base.output_size, self.dueling_hidden_dim),
                 self._get_activation(),
-                nn.Linear(self.hidden_size, num_actions)
+                nn.Linear(self.dueling_hidden_dim, num_actions)
             )
             self.advantage_heads.append(advantage_head)
         

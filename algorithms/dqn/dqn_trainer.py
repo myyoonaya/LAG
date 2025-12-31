@@ -119,16 +119,25 @@ class DQNTrainer:
             current_q.append(q)
         current_q = torch.stack(current_q, dim=1).squeeze(-1)  # (batch_size, num_heads)
         
-        # Compute target Q values using target network
+        # Compute target Q values using Double DQN
+        # Double DQN: use online network to select action, target network to evaluate
         with torch.no_grad():
-            next_q_values = self.policy.target_network(next_obs)  # List of (batch_size, num_actions_i)
+            # Use online network to select best actions
+            next_q_values_online = self.policy.q_network(next_obs)
+            next_actions = []
+            for q_vals in next_q_values_online:
+                best_actions = q_vals.argmax(dim=1, keepdim=True)  # (batch_size, 1)
+                next_actions.append(best_actions)
+            
+            # Use target network to evaluate selected actions
+            next_q_values_target = self.policy.target_network(next_obs)
             next_q_max = []
-            for q_vals in next_q_values:
-                q_max = q_vals.max(dim=1, keepdim=True)[0]  # (batch_size, 1)
-                next_q_max.append(q_max)
+            for i, q_vals in enumerate(next_q_values_target):
+                q_selected = q_vals.gather(1, next_actions[i])  # (batch_size, 1)
+                next_q_max.append(q_selected)
             next_q_max = torch.stack(next_q_max, dim=1).squeeze(-1)  # (batch_size, num_heads)
             
-            # Bellman target: r + gamma * max Q(s', a') * (1 - done)
+            # Bellman target: r + gamma * Q_target(s', argmax Q_online(s', a')) * (1 - done)
             target_q = rewards + self.gamma * next_q_max * (1 - dones)  # (batch_size, num_heads)
         
         # Compute loss (MSE loss for each head)

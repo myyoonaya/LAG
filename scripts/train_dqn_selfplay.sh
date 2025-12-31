@@ -78,5 +78,5 @@ python scripts/train/train_dqn_jsbsim.py \
     --log-interval=${log_interval} \
     --save-interval=${save_interval} \
     --cuda
-    # ${use_wandb} \
+    # --use-wandb \
     # --wandb-name="${wandb_name}"
